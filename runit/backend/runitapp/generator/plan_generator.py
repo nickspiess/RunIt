@@ -1,6 +1,7 @@
 import math
 import os
 import sys
+import random
 import django
 from datetime import date, timedelta
 from django.utils import timezone
@@ -70,6 +71,168 @@ def calculate_weekly_mileage(starting_mileage, goal_mileage, weeks):
 
     return mileage
 
+# get total workouts by difficulty
+def calculate_total_workouts(total_weeks, difficulty):
+    if difficulty == 'easy':
+        total_workouts = 0  # No speed workouts
+    elif difficulty == 'moderate':
+        total_workouts = ((total_weeks - 1) // 2)  # 1 speed workout every other week
+    elif difficulty == 'challenging':
+        total_workouts = total_weeks - 1  # 1 speed workout every week
+    elif difficulty == 'difficult':
+        total_workouts = (total_weeks - 1) + ((total_weeks - 1) // 2) - 1  # 1 speed workout every week, plus 2 every other week
+    elif difficulty == 'intense':
+        total_workouts = (total_weeks - 1) * 2  # 2 speed workouts every week
+    else:
+        raise ValueError("Invalid difficulty level provided.")
+    
+    return total_workouts
+
+# Function to generate the speed workout order
+def generate_speed_workout_order(available_workouts, total_weeks, difficulty):
+    speed_workout_order = []  # List to store the final workout order
+    tempo_run_interval = 3  # Insert a tempo run every 3 workouts
+
+    total_workouts = calculate_total_workouts(total_weeks, difficulty)
+
+    # Define thresholds for starting mile repeats and 2-mile repeats
+    mile_repeat_start = int(total_workouts * 0.25)  # Mile repeats start at 25% into the plan
+    two_mile_repeat_start = int(total_workouts * 0.60)  # 2-mile repeats start at 60% into the plan
+
+    last_mile_repeat = -float('inf')  # Track the last mile repeat placement
+    last_two_mile_repeat = -float('inf')  # Track the last 2-mile repeat placement
+    last_interval_type = None  # Track the last interval type (400m or 800m)
+
+    remaining_workouts = {k: len(v) for k, v in available_workouts.items()}
+
+    def can_place_workout(workout_type, last_workout):
+        """Determine if a workout can be placed based on the previous workout."""
+        if not speed_workout_order:  # Always allow the first workout
+            return True
+        if workout_type == last_workout:  # Prevent back-to-back identical workouts
+            return False
+        if workout_type in ['400m_repeats', '800m_repeats'] and last_workout in ['400m_repeats', '800m_repeats']:
+            return False  # Prevent back-to-back interval workouts
+        if 'tempo_runs' in speed_workout_order[-2:] and workout_type in ['mile_repeats', '2_mile_repeats']:
+            return False  # Prevent placing mile repeats or 2-mile repeats right after a tempo run
+        if workout_type == 'tempo_runs' and any(x in speed_workout_order[-2:] for x in ['mile_repeats', '2_mile_repeats']):
+            return False  # Prevent placing a tempo run after mile or 2-mile repeats
+        return True
+
+    def get_next_interval():
+        """Alternate between 400m and 800m repeats, ensuring they don't occur back-to-back."""
+        nonlocal last_interval_type
+        print('what are our remaining workouts in next interval', remaining_workouts)
+        if last_interval_type == '400m_repeats' and remaining_workouts.get('800m_repeats', 0) > 0:
+            remaining_workouts['800m_repeats'] -= 1
+            last_interval_type = '800m_repeats'
+            return '800m_repeats'
+        elif last_interval_type == '800m_repeats' and remaining_workouts.get('400m_repeats', 0) > 0:
+            remaining_workouts['400m_repeats'] -= 1
+            last_interval_type = '400m_repeats'
+            return '400m_repeats'
+        elif remaining_workouts.get('400m_repeats', 0) > 0:
+            remaining_workouts['400m_repeats'] -= 1
+            last_interval_type = '400m_repeats'
+            return '400m_repeats'
+        elif remaining_workouts.get('800m_repeats', 0) > 0:
+            remaining_workouts['800m_repeats'] -= 1
+            last_interval_type = '800m_repeats'
+            return '800m_repeats'
+        return None
+
+    def get_next_workout():
+        """Select the next available workout type other than 400m or 800m repeats."""
+        possible_workouts = ['hill_repeats', '2min_fartleks']
+        random.shuffle(possible_workouts)
+        for workout in possible_workouts:
+            if remaining_workouts.get(workout, 0) > 0:
+                remaining_workouts[workout] -= 1
+                return workout
+        return None
+
+    def place_tempo_run():
+        """Place a tempo run, ensuring it's not overloaded at the end."""
+        # if we haven't placed a workout yet
+        # base case
+        if len(speed_workout_order) == 0:
+            speed_workout_order.append('tempo_runs')
+            remaining_workouts['tempo_runs'] -= 1
+            return True
+        # at least 3 workouts
+        elif len(speed_workout_order) > 2:
+            # if previous 2 workouts weren't a tempo, place a tempo
+            if (speed_workout_order[-1] != 'tempo_runs' and speed_workout_order[-2] != 'tempo_runs' and speed_workout_order[-1] not in ['2_mile_repeats', '1_mile_repeats']):
+                print('placing tempo run')
+                if (len(speed_workout_order) > 1):
+                    print('lenght of speed workout order', len(speed_workout_order))
+                    sample = speed_workout_order[-1]
+                    print('speed workout order -1', sample)
+                speed_workout_order.append('tempo_runs')
+                remaining_workouts['tempo_runs'] -= 1
+                return True
+
+        return False
+
+    while len(speed_workout_order) < total_workouts:
+        current_position = len(speed_workout_order)
+        last_workout = speed_workout_order[-1] if speed_workout_order else None
+        print()
+        print(f"Current position: {current_position}, Last workout: {last_workout}")
+        print()
+        # fulfilling tempo every 3 times
+        if current_position % tempo_run_interval == 0 and remaining_workouts.get('tempo_runs', 0) > 0:
+            if place_tempo_run():
+                print("Placed tempo run.")
+                continue
+        # 2 mile repeat check
+        elif current_position >= two_mile_repeat_start and remaining_workouts.get('2_mile_repeats', 0) > 0:
+            print('greater than 2 mile repeat start')
+            if current_position - last_two_mile_repeat >= 3 and last_workout not in ['mile_repeats', 'tempo_runs', '2_mile_repeats']:
+                speed_workout_order.append('2_mile_repeats')
+                last_two_mile_repeat = current_position
+                remaining_workouts['2_mile_repeats'] -= 1
+                print("Placed 2-mile repeat.")
+                continue
+        # 1 mile repeat check
+        elif current_position >= mile_repeat_start and remaining_workouts.get('mile_repeats', 0) > 0:
+            print('greater than 1 mile repeat start')
+            if current_position - last_mile_repeat >= 3 and last_workout not in ['2_mile_repeats', 'tempo_runs']:
+                speed_workout_order.append('mile_repeats')
+                last_mile_repeat = current_position
+                remaining_workouts['mile_repeats'] -= 1
+                print("Placed mile repeat.")
+                continue
+
+        # if we had an interval last, grab a workout
+        if last_workout in ['400m_repeats', '800m_repeats']:
+            next_workout = get_next_workout()
+        # else, grab an interval
+        else:
+            next_workout = get_next_interval()
+
+        print('what is the next workout', next_workout)
+        if next_workout and can_place_workout(next_workout, last_workout):
+            speed_workout_order.append(next_workout)
+            print(f"Placed workout: {next_workout}")
+        else:
+            # If we can't place a valid workout, try to relax the constraints slightly
+            if not place_tempo_run():
+                print("No valid workout found, breaking loop.")
+                print()
+                print('current order', speed_workout_order)
+                print()
+                print('remaining workouts', remaining_workouts)
+                print()
+                break
+
+    # Place any remaining tempo runs
+    while len(speed_workout_order) < total_workouts and remaining_workouts.get('tempo_runs', 0) > 0:
+        if place_tempo_run():
+            print("Placed remaining tempo run.")
+
+    return speed_workout_order
+
 ###Easy: 0 speed workouts
 #Moderate: 1 speed workout every other week
 #Challenging: 1 speed workout every week
@@ -80,98 +243,66 @@ def generate_speed_work_schedule(total_weeks, difficulty):
     ### TO DO:
     ### Implement check to be sure that 800m repeats, or no workout, is getting stacked at the end
     ### Implement tiered-difficult -  1, 2, 3, 4, 5 - (easy, moderate, challenging, difficult, intense)
-    difficulty = "hard"
+    difficulty = "intense"
     total_weeks = 18
     speed_work_plans = {
-        'medium': {
-            '400m_repeats': [6, 8, 10, 12, 14, 16],
+        'easy': {},
+        'moderate': {
+            '400m_repeats': [6, 8, 10, 12],
+            'hill_repeats': [6, 8, 10],
             '800m_repeats': [4, 6, 8, 10],
+            '2min_fartleks': [6, 8, 10],
+            'mile_repeats': [4],
+            'tempo_runs': [4, 5, 6, 7]
+        },
+        'challenging': {
+            '400m_repeats': [6, 8, 10, 12],
+            'hill_repeats': [6, 8, 10],
+            '800m_repeats': [4, 6, 8, 10],
+            '2min_fartleks': [6, 8, 10],
             'mile_repeats': [4],
             'tempo_runs': [4, 5, 6, 7],
-            '200m_-_300m_hill_repeats': [4, 6, 8],
-            '2min_fartleks': [6, 8, 10]
+            '2_mile_repeats': [3]
         },
-        'hard': {
-            '400m_repeats': [8, 10, 12, 14, 16, 18, 20],
+        'difficult': {
+            '400m_repeats': [6, 8, 10, 12, 14, 16, 18, 20],
+            'hill_repeats': [6, 8, 10],
+            '800m_repeats': [4, 6, 8, 10],
+            '2min_fartleks': [6, 8, 10, 12, 14],
+            'mile_repeats': [4],
+            'tempo_runs': [4, 5, 6, 7, 8, 9, 10],
+            '2_mile_repeats': [3, 3]
+        },
+        'intense': {
+            '400m_repeats': [6, 8, 10, 12, 14, 16, 18, 20],
+            'hill_repeats': [6, 8, 10],
             '800m_repeats': [4, 6, 8, 10, 12],
+            '2min_fartleks': [6, 8, 10, 12],
             'mile_repeats': [4, 4],
-            'tempo_runs': [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
-            '2_mile_repeats': [3, 3],
-            '300m_-_400m_hill_repeats': [6, 8, 10],
-            '2min_fartleks': [6, 8, 10, 12]
+            'tempo_runs': [4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+            '2_mile_repeats': [3, 3]
         }
     }
 
+    if difficulty not in speed_work_plans:
+        raise ValueError("Invalid difficulty level")
+
+    # Get the available workouts for the given difficulty
+    available_workouts = speed_work_plans[difficulty]
+
+    # Generate the speed workout order
+    speed_workout_order = generate_speed_workout_order(available_workouts, total_weeks, difficulty)
+    print(f"Generated speed workout order: {speed_workout_order}")
+
+    # Initialize the final speed work schedule list
     speed_work_schedule = []
-    if difficulty == 'medium':
-        num_speed_workouts = total_weeks - 1
-        speed_workout_order = ['400m_repeats', '200m_-_300m_hill_repeats', 'tempo_runs', '800m_repeats', '2min_fartleks']
-        speed_workout_plans = speed_work_plans['medium']
-        max_mile_repeats = 1
-    elif difficulty == 'hard':
-        print('hard difficulty')
-        num_speed_workouts = (total_weeks - 1) * 2
-        speed_workout_order = ['400m_repeats', '300m_-_400m_hill_repeats', 'tempo_runs', '800m_repeats', '2min_fartleks']
-        speed_workout_plans = speed_work_plans['hard']
-        max_mile_repeats = 2
-    
-    # Ensuring at least one mile repeats for medium and two for hard
-    mile_repeat_count = 0
-    two_mile_repeat_count = 0
-    last_3x2_mile_index = -5
 
-    i = 0
 
-    while i < num_speed_workouts:
-        workout_type = None
-        # if we are over 60% of the way through the plan, with hard difficulty, and already have max'd out mile repeats allowed
-        if difficulty == 'hard' and two_mile_repeat_count < 2 and i - last_3x2_mile_index >= 5 and i > (num_speed_workouts * 0.6) and mile_repeat_count == max_mile_repeats:
-            # get distance from last 3x2 mile repeat - need to make sure distance is at least 5 workouts from last 3x2 mile
-            # if the previous run wasn't mile repeats or tempo or 3x2, schedule a 3x2 workout
-            if speed_work_schedule[len(speed_work_schedule) - 1][0] != 'mile_repeats' and speed_work_schedule[len(speed_work_schedule) - 1][0] != 'tempo_runs':
-                workout_type = '2_mile_repeats'
-                two_mile_repeat_count += 1
-                last_3x2_mile_index = i
-        # if we have mile repeats left and are over 25% of the way through the plan and haven't chosen 2x3 mile repeats in previous if block
-        if mile_repeat_count < max_mile_repeats and (i % 4 == 3) and workout_type == None:
-            workout_type = 'mile_repeats'
-            mile_repeat_count += 1
-            print('week', i)
-            print('mile repeats')
-        # else, we will grab the order of speed workouts, 400m, 800m, tempo, hill repeats, fartlek
-        elif workout_type == None:
-            if (len(speed_work_schedule) > 2):
-                # if the previous run wasn't a tempo run, assign tempo
-                if speed_work_schedule[i - 1][0] != "tempo_runs" and speed_work_schedule[i - 2][0] != "tempo_runs":
-                    workout_type = "tempo_runs"
-                # else, check the value if it's tempo, if it is, add one
-                elif (speed_workout_order[i % len(speed_workout_order)] == "tempo_runs"):
-                    # list indexing check over and underflow
-                    sample = i % len(speed_workout_order)
-                    if (i % len(speed_workout_order) == 0):
-                        workout_type = speed_workout_order[(i % len(speed_workout_order)) + 1]
-                    else:
-                        workout_type = speed_workout_order[(i % len(speed_workout_order)) - 1]
-                # default to whatever order is
-                else:
-                    # check for previous workout being the same , avoid repeats
-                    workout_type = speed_workout_order[i % len(speed_workout_order)]
-            else:
-                workout_type = speed_workout_order[i % len(speed_workout_order)]
-
-        # get amount of repeats and append it to the schedule
-        print('what is the workout type', workout_type)
-        print('speed workout plans', speed_workout_plans)
-        repeats = speed_workout_plans[workout_type].pop(0)
-        speed_work_schedule.append((workout_type, repeats))
-
-        # check if no workouts left for type to remove empty workouts so we don't query again in the future
-        if speed_workout_plans[workout_type] == []:
-            del speed_work_plans[difficulty][workout_type]
-            if workout_type in speed_workout_order:
-                speed_workout_order.remove(workout_type)
-        
-        i += 1
+    # Iterate over the workout order and pop the interval/distance from available_workouts
+    for workout_type in speed_workout_order:
+        if workout_type in available_workouts and available_workouts[workout_type]:
+            repeats = available_workouts[workout_type].pop(0)
+            speed_work_schedule.append((workout_type, repeats))
 
     return speed_work_schedule
 
@@ -234,25 +365,10 @@ def plan_weekly_sessions(runner, weekly_mileage, long_runs, long_run_day_str, sp
     last_speed_workout_date = runner.race_date - timedelta(days=10)
     max_speed_work_week = min(max_speed_work_week, (last_speed_workout_date - date.today()).days // 7)
 
-    if (difficulty == "medium"):
-        speed_work_plans = {
-            '400m_repeats': [6, 8, 10, 12, 14, 16],
-            '800m_repeats': [4, 6, 8, 10],
-            'mile_repeats': [4],
-            'tempo_runs': [4, 5, 6, 7],
-        }
-    elif (difficulty == "hard"):
-        speed_work_plans = {
-            '400m_repeats': [8, 10, 12, 14, 16, 18],
-            '800m_repeats': [4, 6, 8, 10, 12],
-            'mile_repeats': [4],
-            'tempo_runs': [4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
-            '3x2_mile_repeats': [6]
-        }
 
     schedule = generate_speed_work_schedule(total_weeks, difficulty)
     for week, (workout, repeats) in enumerate(schedule):
-        print(f"Week {week + 1}: {repeats}x {workout.replace('_', ' ')}")
+        print(f"Workout {week + 1}: {repeats}x {workout.replace('_', ' ')}")
 
     exit()
 
