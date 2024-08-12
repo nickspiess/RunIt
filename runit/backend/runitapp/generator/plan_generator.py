@@ -244,7 +244,7 @@ def generate_speed_work_schedule(total_weeks, difficulty):
     ### Implement check to be sure that 800m repeats, or no workout, is getting stacked at the end
     ### Implement tiered-difficult -  1, 2, 3, 4, 5 - (easy, moderate, challenging, difficult, intense)
     difficulty = "intense"
-    total_weeks = 18
+    total_weeks = 18 
     speed_work_plans = {
         'easy': {},
         'moderate': {
